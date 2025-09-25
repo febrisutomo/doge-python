@@ -1,0 +1,61 @@
+{
+    "status": "success",
+    "model": "Multinomial Logistic Regression",
+    "threshold": 0.05,
+    "lag": 0,
+    "accuracy": 0.7768542199488491,
+    "report": {
+        "down": {
+            "precision": 0.37142857142857144,
+            "recall": 0.4789473684210526,
+            "f1-score": 0.41839080459770117,
+            "support": 190.0
+        },
+        "neutral": {
+            "precision": 0.91875,
+            "recall": 0.8698224852071006,
+            "f1-score": 0.8936170212765957,
+            "support": 1183.0
+        },
+        "up": {
+            "precision": 0.47738693467336685,
+            "recall": 0.4973821989528796,
+            "f1-score": 0.48717948717948717,
+            "support": 191.0
+        },
+        "accuracy": 0.7768542199488491,
+        "macro avg": {
+            "precision": 0.5891885020339794,
+            "recall": 0.615384017527011,
+            "f1-score": 0.5997291043512614,
+            "support": 1564.0
+        },
+        "weighted avg": {
+            "precision": 0.7983590684744512,
+            "recall": 0.7768542199488491,
+            "f1-score": 0.7862496618254846,
+            "support": 1564.0
+        }
+    },
+    "rows": 1564,
+    "features_used": [
+        "positive",
+        "negative",
+        "neutral",
+        "VolumeChange",
+        "Volatility",
+        "MA_3",
+        "Volatility_5"
+    ],
+    "class_distribution_before": {
+        "neutral": 1183,
+        "up": 191,
+        "down": 190
+    },
+    "class_distribution_after": {
+        "neutral": 1183,
+        "up": 1183,
+        "down": 1183
+    },
+    "result_file": "/Users/febrisutomo/Dev/analisis-dogecoin/data/logistic_regression_results.csv"
+}
