@@ -137,10 +137,6 @@ def get_musk_tweets():
 @app.route("/analyze-sentiment", methods=["GET"])
 def analyze_sentiment():
     try:
-        # ============================================================
-        # 0) CEK FILE INPUT
-        # Pastikan file musk_tweets.csv tersedia sebelum diproses
-        # ============================================================
         input_path = os.path.join(DATA_DIR, "musk_tweets.csv")
         if not os.path.exists(input_path):
             return (
@@ -148,34 +144,19 @@ def analyze_sentiment():
                 404,
             )
 
-        # ============================================================
-        # 1) LOAD DATA
-        # Baca semua kolom dari musk_tweets.csv agar fleksibel
-        # ============================================================
+        # Baca semua kolom (biar fleksibel)
         df = pd.read_csv(input_path)
 
-        # ============================================================
-        # 2) VALIDASI KOMPONEN WAJIB
-        # Pastikan kolom minimal ada: id, createdAt, fullText
-        # ============================================================
+        # Pastikan kolom wajib ada
         required_cols = ["id", "createdAt", "fullText"]
         for col in required_cols:
             if col not in df.columns:
                 return jsonify({"error": f"Kolom wajib '{col}' tidak ditemukan di musk_tweets.csv"}), 400
 
-        # ============================================================
-        # 3) HANDLE MISSING VALUES
-        # Jika ada NaN di fullText → isi dengan string kosong
-        # ============================================================
+        # Handle NaN di teks
         df["fullText"] = df["fullText"].fillna("")
 
-        # ============================================================
-        # 4) CLEANING TEKS
-        # - Hapus URL
-        # - Hapus mention (@username)
-        # - Ubah ke lowercase
-        # Tujuan: teks lebih bersih agar VADER bekerja optimal
-        # ============================================================
+        # --- Cleaning teks ---
         import re
         def clean_text(text):
             text = re.sub(r"http\S+", "", str(text))   # hapus URL
@@ -184,29 +165,17 @@ def analyze_sentiment():
 
         df["cleanText"] = df["fullText"].apply(clean_text)
 
-        # ============================================================
-        # 5) ANALISIS SENTIMEN VADER
-        # polarity_scores → hasil berupa dict: {neg, neu, pos, compound}
-        # ============================================================
+        # --- Analisis VADER ---
         analyzer = SentimentIntensityAnalyzer()
         scores = df["cleanText"].apply(analyzer.polarity_scores)
 
-        # ============================================================
-        # 6) EKSTRAK NILAI SKOR
-        # Tambahkan kolom numerik: neg, neu, pos, compound
-        # ============================================================
+        # Ekstrak skor
         df["neg"] = scores.apply(lambda x: x["neg"])
         df["neu"] = scores.apply(lambda x: x["neu"])
         df["pos"] = scores.apply(lambda x: x["pos"])
         df["compound"] = scores.apply(lambda x: x["compound"])
 
-        # ============================================================
-        # 7) LABEL SENTIMEN KATEGORIK
-        # Berdasarkan compound score:
-        #   >  0.05 → positive
-        #   < -0.05 → negative
-        #   else    → neutral
-        # ============================================================
+        # Label sentimen sederhana
         def get_sentiment(score):
             if score > 0.05:
                 return "positive"
@@ -217,14 +186,10 @@ def analyze_sentiment():
 
         df["sentiment"] = df["compound"].apply(get_sentiment)
 
-        # ============================================================
-        # 8) SIMPAN HASIL
-        # Buat file musk_tweets_sentiment.csv dengan kolom tambahan
-        # ============================================================
+        # Simpan hasil ke CSV
         output_path = os.path.join(DATA_DIR, "musk_tweets_sentiment.csv")
         df.to_csv(output_path, index=False)
 
-        # kembalikan pesan sukses
         return jsonify({
             "status": "success",
             "rows": len(df),
@@ -233,22 +198,13 @@ def analyze_sentiment():
         })
 
     except Exception as e:
-        # Jika ada kesalahan, kembalikan pesan error
         return jsonify({"error": str(e)}), 500
-
 
 
 
 @app.route('/analyze-logistic-regression', methods=['GET'])
 def analyze_logistic_regression():
     try:
-        # ============================================================
-        # 0) VALIDASI INPUT FILE
-        # ------------------------------------------------------------
-        # Pastikan kedua dataset tersedia:
-        # - doge_prices.csv (harga OHLCV Dogecoin)
-        # - musk_tweets_sentiment.csv (hasil /analyze-sentiment)
-        # ============================================================
         doge_path = os.path.join(DATA_DIR, "doge_prices.csv")
         tweet_path = os.path.join(DATA_DIR, "musk_tweets_sentiment.csv")
 
@@ -257,148 +213,104 @@ def analyze_logistic_regression():
         if not os.path.exists(tweet_path):
             return jsonify({"error": "musk_tweets_sentiment.csv belum tersedia, jalankan /analyze-sentiment dulu"}), 404
 
-        # ============================================================
-        # 1) PARAMETER
-        # ------------------------------------------------------------
-        # threshold  : ambang % perubahan harga untuk label up/down/neutral
-        # scale      : True = pakai StandardScaler (fit di train, transform di test)
-        # cv         : jumlah folds untuk TimeSeriesSplit (cross-val time series)
-        # ============================================================
+        # ===== Parameter =====
         threshold = float(request.args.get("threshold", 0.02))
         scale_flag = request.args.get("scale", "true").lower() == "true"
         n_splits = int(request.args.get("cv", 5))  # default 5 folds
 
-        # ============================================================
-        # 2) LOAD & CLEAN DATA HARGA
-        # ------------------------------------------------------------
-        # - Parse kolom Date
-        # - Konversi OHLCV ke numerik (jika ada string -> NaN -> aman)
-        # - Hitung return harian (pct_change) dan isi NaN dengan 0
-        # - Buat label kelas (Movement_future) berdasarkan threshold
-        # ============================================================
+        # ===== Load harga Dogecoin =====
         df = pd.read_csv(doge_path, parse_dates=["Date"])
         for col in ["Open", "High", "Low", "Close", "Volume"]:
             df[col] = pd.to_numeric(df[col], errors="coerce")
         df["Return"] = df["Close"].pct_change().fillna(0)
 
         def price_label(x, threshold=threshold):
-            if x > threshold: 
-                return "up"
-            elif x < -threshold: 
-                return "down"
+            if x > threshold: return "up"
+            elif x < -threshold: return "down"
             return "neutral"
         df["Movement_future"] = df["Return"].apply(price_label)
 
-        # ============================================================
-        # 3) FEATURE ENGINEERING (TEKNIKAL)
-        # ------------------------------------------------------------
-        # - VolumeChange  : % perubahan volume
-        # - Volatility    : High - Low (rentang harian)
-        # - MA(3/7/14)    : moving average & deviasi dari MA (Close/MA - 1)
-        # - Volatility_5  : std dev return 5 hari
-        # - RSI_14        : momentum 14 hari
-        # - BB_z          : Bollinger z-score (posisi vs mean±std 20 hari)
-        # - Return_lag*   : return t-1, t-2, t-3, t-5
-        # ============================================================
+        # ===== Fitur teknikal =====
         df["VolumeChange"] = df["Volume"].pct_change().fillna(0)
         df["Volatility"] = df["High"] - df["Low"]
-
         df["MA_3"] = df["Close"].rolling(3).mean().fillna(method="bfill")
         df["MA_7"] = df["Close"].rolling(7).mean().fillna(method="bfill")
         df["MA_14"] = df["Close"].rolling(14).mean().fillna(method="bfill")
 
+        # MA deviation
         for ma in [3, 7, 14]:
-            df[f"MA_{ma}_dev"] = (
-                df["Close"] / df[f"MA_{ma}"] - 1
-            ).replace([np.inf, -np.inf], 0).fillna(0)
+            df[f"MA_{ma}_dev"] = (df["Close"]/df[f"MA_{ma}"] - 1).replace([np.inf, -np.inf], 0).fillna(0)
 
         df["Volatility_5"] = df["Return"].rolling(5).std().fillna(method="bfill")
 
+        # RSI 14
         delta = df["Close"].diff()
         gain = delta.where(delta > 0, 0).rolling(14).mean()
         loss = -delta.where(delta < 0, 0).rolling(14).mean()
-        rs = gain / (loss + 1e-9)  # +eps cegah pembagi 0
-        df["RSI_14"] = 100 - (100 / (1 + rs))
+        rs = gain / (loss + 1e-9)
+        df["RSI_14"] = 100 - (100/(1+rs))
 
+        # Bollinger z-score
         rolling_mean = df["Close"].rolling(20).mean()
         rolling_std = df["Close"].rolling(20).std().replace(0, np.nan)
         df["BB_z"] = ((df["Close"] - rolling_mean) / rolling_std).fillna(0).clip(-5, 5)
 
+        # Lagged returns
         for lag in [1, 2, 3, 5]:
             df[f"Return_lag{lag}"] = df["Return"].shift(lag).fillna(0)
 
-        # ============================================================
-        # 4) LOAD & PREP SENTIMEN TWEET
-        # ------------------------------------------------------------
-        # - Parse createdAt -> date
-        # - (Opsional) filter hanya tweet asli (bukan reply/retweet/quote)
-        # - Hitung bobot engagement: like + 2*retweet + reply + quote + 1
-        # - Kalikan skor sentimen (compound/pos/neg/neu) dengan bobot
-        # - Agregasi harian -> rata-rata berbobot
-        # - Bentuk fitur temporal: roll3, ewm3, diff, surge (z-score 7 hari)
-        # ============================================================
+        # ===== Load sentiment =====
         tweets = pd.read_csv(tweet_path, parse_dates=["createdAt"])
         tweets["date"] = tweets["createdAt"].dt.date
+        # weight = tweets.get("likeCount", 1) + tweets.get("retweetCount", 1) + 1
+        
 
-        # (Opsional) aktifkan jika hanya ingin tweet asli Elon (bukan reply/retweet/quote)
-        # if {"isRetweet", "isReply", "isQuote"}.issubset(tweets.columns):
-        #     tweets = tweets[(~tweets["isRetweet"]) & (~tweets["isReply"])]
-
-        # Pastikan kolom engagement ada & aman dari NaN
-        for col in ["likeCount", "retweetCount", "replyCount", "quoteCount"]:
-            if col not in tweets.columns:
-                tweets[col] = 0
-        tweets[["likeCount","retweetCount","replyCount","quoteCount"]] = \
-            tweets[["likeCount","retweetCount","replyCount","quoteCount"]].fillna(0)
-
-        # Bobot engagement komprehensif (popularitas + sebaran + diskusi + framing)
+        # for col in ["compound", "pos", "neg", "neu"]:
+        #     tweets[f"{col}_w"] = tweets[col] * weight
+        
+        # Hitung bobot tweet: popularitas + sebaran + diskusi + framing
         tweets["weight"] = (
-            tweets["likeCount"].astype(float)
-            + 2 * tweets["retweetCount"].astype(float)
-            + tweets["replyCount"].astype(float)
-            + tweets["quoteCount"].astype(float)
-            + 1.0
+            tweets.get("likeCount", 0) +
+            2 * tweets.get("retweetCount", 0) +
+            tweets.get("replyCount", 0) +
+            tweets.get("quoteCount", 0) +
+            1
         )
 
-        # Kalikan skor sentimen dengan bobot (aman jika ada NaN -> fill 0)
+        # # Kalikan skor sentimen dengan bobot
         for col in ["compound", "pos", "neg", "neu"]:
-            if col not in tweets.columns:
-                tweets[col] = 0.0
-            tweets[col] = tweets[col].fillna(0.0)
             tweets[f"{col}_w"] = tweets[col] * tweets["weight"]
 
-        # Agregasi harian: jumlahkan bobot & bobot*sentimen
-        sent = tweets.groupby("date")[["compound_w", "pos_w", "neg_w", "neu_w", "weight"]].sum().reset_index()
 
-        # Rata-rata berbobot + fitur temporal (roll3/ewm3/diff/surge)
+        # sent = tweets.groupby("date")[
+        #     ["compound_w", "pos_w", "neg_w", "neu_w", "likeCount", "retweetCount"]
+        # ].sum().reset_index()
+
+        # for col in ["compound", "pos", "neg", "neu"]:
+        #     sent[col] = (
+        #         sent[f"{col}_w"] / (sent["likeCount"] + sent["retweetCount"] + 1)
+        #     ).fillna(0)
+        sent = tweets.groupby("date")[
+            ["compound_w", "pos_w", "neg_w", "neu_w", "weight"]
+        ].sum().reset_index()
+
         for col in ["compound", "pos", "neg", "neu"]:
             sent[col] = (sent[f"{col}_w"] / sent["weight"]).fillna(0)
+
             sent[f"{col}_roll3"] = sent[col].rolling(3).mean().fillna(method="bfill")
             sent[f"{col}_ewm3"]  = sent[col].ewm(span=3).mean()
             sent[f"{col}_diff"]  = sent[col].diff().fillna(0)
-            sent[f"{col}_surge"] = (
-                (sent[col] - sent[col].rolling(7).mean())
-                / (sent[col].rolling(7).std() + 1e-9)
-            ).replace([np.inf, -np.inf], 0).fillna(0).clip(-5, 5)
+            sent[f"{col}_surge"] = ((sent[col] - sent[col].rolling(7).mean()) /
+                                    (sent[col].rolling(7).std()+1e-9))\
+                                    .replace([np.inf, -np.inf], 0).fillna(0).clip(-5, 5)
 
-        # ============================================================
-        # 5) MERGE HARGA + SENTIMEN
-        # ------------------------------------------------------------
-        # - Join berdasarkan tanggal
-        # - Isi missing dengan 0 (misal hari tanpa tweet)
-        # - Filter hanya label valid (up/down/neutral)
-        # ============================================================
+        # ===== Merge =====
         df["date"] = df["Date"].dt.date
         dfm = pd.merge(df, sent, on="date", how="left").fillna(0)
         valid_labels = ["up", "down", "neutral"]
         dfm = dfm[dfm["Movement_future"].isin(valid_labels)]
 
-        # ============================================================
-        # 6) DEFINISI FITUR & TARGET
-        # ------------------------------------------------------------
-        # - Kumpulan fitur teknikal + sentimen (roll/ewm/diff/surge)
-        # - VarianceThreshold buang fitur konstan/nyaris konstan
-        # ============================================================
+        # ===== Features =====
         features = [
             "compound_roll3", "compound_ewm3", "compound_diff", "compound_surge",
             "pos_roll3", "pos_ewm3", "pos_diff",
@@ -411,19 +323,12 @@ def analyze_logistic_regression():
         X = dfm[features]
         y = dfm["Movement_future"]
 
+        # ===== VarianceThreshold =====
         vt = VarianceThreshold(1e-6)
         X = vt.fit_transform(X)
         kept_features = [f for f, keep in zip(features, vt.get_support()) if keep]
 
-        # ============================================================
-        # 7) CROSS-VALIDATION (TIME SERIES)
-        # ------------------------------------------------------------
-        # - TimeSeriesSplit menjaga urutan waktu (tanpa shuffle)
-        # - Scaling: fit di train, transform di test (hindari data leakage)
-        # - Model: LogisticRegression multinomial (lbfgs), class_weight=balanced
-        # - Metrik: Accuracy, MCC, Balanced Accuracy, Macro-F1, Report, Conf Mat
-        # - Feature importance: rata-rata koefisien across KELAS & FOLD
-        # ============================================================
+        # ===== Cross-validation =====
         tscv = TimeSeriesSplit(n_splits=n_splits)
         accs, mccs, bal_accs, macro_f1s = [], [], [], []
         fold_results = []
@@ -433,24 +338,18 @@ def analyze_logistic_regression():
             X_train, X_test = X[train_idx], X[test_idx]
             y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 
-            # Scaling optional, tetapi direkomendasikan untuk stabilitas solver
             if scale_flag:
                 scaler = StandardScaler()
                 X_train = scaler.fit_transform(X_train)
                 X_test = scaler.transform(X_test)
 
             model = LogisticRegression(
-                multi_class="multinomial",
-                solver="lbfgs",
-                max_iter=1000,
-                class_weight="balanced",
-                C=1.0,               # bisa di-tune (mis: 0.5/1/2) untuk regulerisasi
-                # random_state=42     # bisa diaktifkan untuk full reproducibility
+                multi_class="multinomial", solver="lbfgs",
+                max_iter=1000, class_weight="balanced", C=1.0
             )
             model.fit(X_train, y_train)
             y_pred = model.predict(X_test)
 
-            # Evaluasi per fold
             acc = accuracy_score(y_test, y_pred)
             mcc = matthews_corrcoef(y_test, y_pred)
             bal_acc = balanced_accuracy_score(y_test, y_pred)
@@ -472,22 +371,13 @@ def analyze_logistic_regression():
                 "report": report,
                 "confusion_matrix": cm
             })
-
-            # Rata-rata koefisien across KELAS untuk fairness multinomial
-            # (coef_.shape = [n_classes, n_features])
+            
             coef_sum += model.coef_.mean(axis=0)
 
-        # Rata-rata koefisien across FOLD -> feature importance final
-        feature_importance = dict(zip(kept_features, coef_sum / len(accs)))
+        feature_importance = dict(zip(kept_features, coef_sum/len(accs)))
+        
         feature_importance = sorted(feature_importance.items(), key=lambda x: x[1], reverse=True)
 
-        # ============================================================
-        # 8) RANGKUMAN OUTPUT
-        # ------------------------------------------------------------
-        # - Ringkas metrik CV (mean/std) & last fold
-        # - Simpan report & confusion matrix last fold
-        # - Sertakan feature importance (sorted)
-        # ============================================================
         result_json = {
             "status": "success",
             "model": "Multinomial Logistic Regression",
@@ -505,7 +395,6 @@ def analyze_logistic_regression():
             "feature_importance": feature_importance,
         }
 
-        # (Opsional) simpan ke file JSON untuk audit/pelaporan
         json_path = os.path.join(DATA_DIR, "logistic_regression_evaluation.json")
         with open(json_path, "w") as f:
             json.dump(result_json, f, indent=4, default=str)
@@ -513,14 +402,15 @@ def analyze_logistic_regression():
         return jsonify(result_json)
 
     except Exception as e:
-        # Tangkap error tak terduga agar API tetap mengembalikan JSON
         return jsonify({"error": str(e)}), 500
+
+
 
 
 @app.route('/model-evaluation', methods=['GET'])
 def logistic_regression_results():
     try:
-        json_path = os.path.join(DATA_DIR, "logistic_regression_evaluation.json")
+        json_path = os.path.join(DATA_DIR, "logistic_regression_results.json")
 
         if not os.path.exists(json_path):
             return jsonify({"error": "Belum ada hasil logistic regression. Jalankan /analyze-logistic-regression dulu."}), 404
@@ -637,9 +527,7 @@ def tweets_sentiment():
 
         # Jika ada query search, filter berdasarkan fullText
         if search_query:
-            df_tweets = df_tweets[
-                df_tweets["fullText"].str.lower().str.contains(search_query, na=False)
-            ]
+            df_tweets = df_tweets[df_tweets["fullText"].str.lower().str.contains(search_query, na=False)]
 
         total_rows = len(df_tweets)
         total_pages = (total_rows + limit - 1) // limit  # ceil division
@@ -647,12 +535,8 @@ def tweets_sentiment():
         # Ambil subset sesuai pagination
         df_page = df_tweets.iloc[offset:offset + limit].copy()
 
-        # Drop kolom viewCount kalau ada
-        if "viewCount" in df_page.columns:
-            df_page = df_page.drop(columns=["viewCount"])
-
-        # Ganti NaN dengan 0 biar aman
-        df_page = df_page.fillna(0)
+        # Pastikan tidak ada NaN di subset
+        df_page = df_page.where(pd.notnull(df_page), None)
 
         # Hitung distribusi sentimen (setelah filter)
         sentiment_counts = df_tweets["sentiment"].value_counts().to_dict()
@@ -662,7 +546,7 @@ def tweets_sentiment():
             k: round((v / total_sentiment) * 100, 2) for k, v in sentiment_counts.items()
         }
 
-        # Konversi ke JSON aman
+        # Konversi ke JSON aman dari NaN
         data = df_page.to_dict(orient="records")
 
         return jsonify({
@@ -679,7 +563,6 @@ def tweets_sentiment():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 
 
 
@@ -781,6 +664,15 @@ def logistic_results():
         # Load data
         df = pd.read_csv(result_path, parse_dates=["date"])
 
+        # Pastikan kolom ada
+        expected_cols = [
+            "positive", "negative", "neutral",
+            "VolumeChange", "Volatility", "MA_3", "Volatility_5",
+            "date", "actual", "predicted"
+        ]
+        missing_cols = [c for c in expected_cols if c not in df.columns]
+        if missing_cols:
+            return jsonify({"error": f"Kolom hilang di file: {missing_cols}"}), 400
 
         # Urutkan berdasarkan tanggal
         df = df.sort_values("date")
@@ -792,7 +684,7 @@ def logistic_results():
         df_page = df.iloc[offset:offset + limit].copy()
 
         # Konversi ke JSON
-        data = df_page.to_dict(orient="records")
+        data = df_page[expected_cols].to_dict(orient="records")
 
         return jsonify({
             "status": "success",
